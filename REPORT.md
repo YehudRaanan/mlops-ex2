@@ -88,7 +88,7 @@ Final dashboard (valid iter-2 run): vLLM `num_requests_running` **247** (~max-nu
 (247 seqs sharing the GPU), so a request floors at ~7s regardless of queueing - latency is
 bounded by the **multi-call agent shape**, not the serving flags. vLLM is concurrency-capped
 (247/256) with KV headroom (41%), i.e. compute/scheduler-bound, not memory-bound. Quality
-survived tuning (serving flags unchanged from S5, so eval is unchanged); `results/load_after.json`.
+survived: post-tuning eval `results/eval_after_tuning.json` = **36.7%**, identical to baseline (serving precision unchanged; tuning was concurrency + the schema-render fix). `results/load_after.json` holds the final latency distribution.
 
 ## 7. What I'd do with more time (specific)
 
