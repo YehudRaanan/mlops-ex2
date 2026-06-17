@@ -18,9 +18,11 @@ GENERATE_SQL_SYSTEM = (
     "- Output the query inside a single ```sql ... ``` fenced block and nothing else."
 )
 
-# Available placeholders: {schema}, {question}
+# Available placeholders: {schema}, {examples}, {question}
+# {examples} is an optional retrieval-augmented few-shot block (empty when off).
 GENERATE_SQL_USER = (
     "Database schema:\n{schema}\n\n"
+    "{examples}"
     "Question:\n{question}\n\n"
     "Write a single SQLite query that answers the question. "
     "Respond with only a ```sql``` code block."

@@ -176,3 +176,26 @@ Three low-risk levers on top of v4:
 versions, within 30-question run-to-run variance) - capping revise to 1 did not cost
 quality this run. **SLO (P95 < 5s) effectively met**: 5.27s is within run-to-run noise of
 the line; p50 is ~1s. Remaining margin would come from FP8 (frees KV + faster decode).
+### v6 - retrieval-augmented few-shot (SLO MET + best accuracy)
+
+`agent/fewshot_index.py` retrieves the K most similar solved `question -> SQL`
+examples (dense cosine over a cached embedding matrix) from a pool = BIRD dev
+**minus the 30 eval questions** (no answer leakage - verified the eval question
+never appears in the injected examples; same-DB examples preferred). Injected into
+the generate prompt via `{examples}`; enable with `FEWSHOT_K` (default 0).
+
+| Version | eval | p50 | p95 | errors |
+|---|---|---|---|---|
+| baseline | 36.7% | 88s | 119s | 38% |
+| v5 | 36.7% | 1.13s | 5.27s | 0.1% |
+| **v6 (+few-shot k=3)** | **46.7%** | 2.38s | **4.55s** | 0.1% |
+
+Few-shot lifted execution accuracy **36.7% -> 46.7%** (+10 pts, honest / no-leakage)
+**and met the SLO** (p95 **4.55s < 5s**). Counter-intuitively faster despite a larger
+prompt: better first-try SQL dropped avg iterations 1.2 -> 1.07, so with verify-gating
+most requests are a single model call - accuracy and latency improved together.
+
+Note: BIRD's per-question `evidence` hint is still unused (the scaffold's `load_data.py`
+strips it); feeding it in would likely push accuracy further toward the ~54-57%
+single-model leaderboard range. Fine-tuning (LoRA on the train split) is the higher
+ceiling but out of this assignment's "model is fixed / inference+o11y" scope.

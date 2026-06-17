@@ -61,6 +61,11 @@ SCHEMA_TOPK = int(os.environ.get("SCHEMA_TOPK", "3"))
 # Default 0 keeps the always-verify behavior.
 GATE_VERIFY = os.environ.get("GATE_VERIFY") == "1"
 
+# Retrieval-augmented few-shot: K>0 injects the K most similar solved
+# (question -> SQL) examples (from a dev-set pool that EXCLUDES the eval
+# questions) into the generate prompt via agent/fewshot_index.py. Default 0 = off.
+FEWSHOT_K = int(os.environ.get("FEWSHOT_K", "0"))
+
 
 @dataclass
 class AgentState:
@@ -151,10 +156,16 @@ def generate_sql_node(state: AgentState) -> dict:
     This node is wired and ready; fill in GENERATE_SQL_SYSTEM / GENERATE_SQL_USER
     in prompts.py to make it produce real queries.
     """
+    examples = ""
+    if FEWSHOT_K > 0:
+        from agent.fewshot_index import retrieve_examples
+
+        examples = retrieve_examples(state.db_id, state.question, FEWSHOT_K)
     response = llm().invoke([
         ("system", prompts.GENERATE_SQL_SYSTEM),
         ("user", prompts.GENERATE_SQL_USER.format(
             schema=state.schema,
+            examples=examples,
             question=state.question,
         )),
     ])
