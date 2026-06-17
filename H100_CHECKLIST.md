@@ -54,3 +54,21 @@ Iterate these for the SLO (P95 < 5s @ 10+ RPS); record each flag + rationale in 
 - Revert the `docker-compose.yml` `LANGFUSE_INIT_*` seed (drops the hardcoded `langfuse123`) for a
   clean compose, then get keys via the Langfuse UI.
 - `.gitignore` excludes `screenshots/*.png` - keep using `git add -f` for the deliverable screenshots.
+---
+
+## Discovered during the real H100 run (2026-06-17) - fold these in
+
+1. **transformers must be < 5** (`uv.lock` pulls 5.x; vLLM 0.10.2 needs the 4.5x tokenizer
+   API). Fix: `uv pip install "transformers==4.55.4"` after `uv sync` (or pin in pyproject
+   and re-lock). Symptom: `Qwen2Tokenizer has no attribute all_special_tokens_extended`.
+2. **python3-dev + build-essential required** (the prerequisites' "torch.compile needs
+   headers"). Without them vLLM engine init dies in Triton: `gcc ... cuda_utils.c ... exit 1`.
+   Fix: `sudo apt-get install -y python3-dev build-essential`.
+3. **Run the agent with multiple uvicorn workers** for the SLO. The sync `/answer` endpoint
+   caps at FastAPI's 40-thread pool -> vLLM starves (running pinned 40, KV 13%). `--workers 8`
+   took P95 119s -> 53s. (Restart cleanly: kill old workers + free port 8001 first, else
+   `Errno 98 Address already in use` leaves the agent down.)
+4. **schema.py None-FK fix is now in the code** (PRAGMA foreign_key_list "to" is NULL for
+   implicit-PK FKs) - this removed a deterministic ~12% HTTP-500 rate on big-schema DBs.
+5. Image used: `ubuntu24.04-cuda13.0-serverless` (driver 580); platform `gpu-h100-sxm`,
+   preset `1gpu-16vcpu-200gb`, 300 GB network_ssd boot disk.
