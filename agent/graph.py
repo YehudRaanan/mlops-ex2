@@ -53,6 +53,13 @@ _NO_THINK = os.environ.get("VLLM_NO_THINK") == "1"
 # latency on BIRD (see REPORT section 8).
 SCHEMA_TOPK = int(os.environ.get("SCHEMA_TOPK", "3"))
 
+# Verify-gating: when 1, skip the verify (and revise) calls if the SQL executed
+# and returned >=1 row - accept it as a single-call fast path. verify+revise then
+# only fire on the suspicious cases (error / zero rows), which is where the loop
+# earns its keep. Cuts calls-per-request from ~2-3 to ~1 for the common case.
+# Default 0 keeps the always-verify behavior.
+GATE_VERIFY = os.environ.get("GATE_VERIFY") == "1"
+
 
 @dataclass
 class AgentState:
@@ -237,6 +244,21 @@ def route_after_verify(state: AgentState) -> str:
     return "revise"
 
 
+def route_after_execute(state: AgentState) -> str:
+    """Gating router (used only when GATE_VERIFY=1).
+
+    Accept immediately (skip verify+revise) when the SQL ran and returned rows -
+    the common, plausible case. Only spend a verify call on the suspicious cases
+    (execution error or zero rows), and stop once the iteration cap is hit.
+    """
+    ex = state.execution
+    if ex is not None and ex.ok and ex.row_count > 0:
+        return "end"
+    if state.iteration >= MAX_ITERATIONS:
+        return "end"
+    return "verify"
+
+
 # ---- Graph wiring -----------------------------------------------------
 
 def build_graph():
@@ -250,7 +272,15 @@ def build_graph():
     g.add_edge(START, "attach_schema")
     g.add_edge("attach_schema", "generate_sql")
     g.add_edge("generate_sql", "execute")
-    g.add_edge("execute", "verify")
+    if GATE_VERIFY:
+        # execute -> (accept | verify) instead of always verifying
+        g.add_conditional_edges(
+            "execute",
+            route_after_execute,
+            {"verify": "verify", "end": END},
+        )
+    else:
+        g.add_edge("execute", "verify")
     g.add_conditional_edges(
         "verify",
         route_after_verify,

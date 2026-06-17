@@ -139,3 +139,20 @@ Schema pruning cut p95 **60s -> 21s** under load (~65%) - far more than the unlo
 because prefill is the saturation point at 10 RPS. v3 eval 43.3% (within the 30-question
 run-to-run variance of the 36.7% baseline). SLO (5s) still missed; the remaining gap is the
 2-3 sequential calls/request - next lever is gating `verify`. Trajectory: **119s -> 60s -> 21s**.
+### v4 - verify-gating (single-call fast path)
+
+`GATE_VERIFY=1` skips verify+revise when the SQL executed and returned >=1 row
+(accept immediately); verify/revise still fire on errors / empty results, so the
+loop keeps its value and the Phase-3 requirement holds. Opt-in (default off).
+
+| Version | Config | eval | load p50 | p95 | errors |
+|---|---|---|---|---|---|
+| baseline | full schema, 1 sync worker | 36.7% | 88s | 119s | 38% |
+| v2 | + 8 workers + schema-fix | 36.7% | 6.1s | 60s | 0.5% |
+| v3 | + schema-pruning k=3 (CPU embeds) | 43.3% | 6.5s | 21s | 0.5% |
+| **v4** | **+ verify-gating** | **40.0%** | **1.47s** | **7.6s** | 0.2% |
+
+p95 **119 -> 60 -> 21 -> 7.6s** (16x); p50 1.5s. Avg iterations 1.53 -> 1.37; quality
+held (40.0%, within +-3-question run-to-run variance). SLO (5s) just missed at p95 7.6s -
+the tail is the error/empty requests that still verify+revise, plus open-loop queueing.
+Remaining headroom: cap revise to 1 iteration, or raise concurrency (KV still ~40%).
