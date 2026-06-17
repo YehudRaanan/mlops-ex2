@@ -5,8 +5,23 @@ plain English, the system writes SQL, runs it against a SQLite warehouse
 ([BIRD-bench](https://bird-bench.github.io/)), and returns the rows - served on a **single
 H100** with production-style monitoring and tracing.
 
-Built for the Nebius MLOps assignment (original brief preserved in
-[ASSIGNMENT.md](ASSIGNMENT.md)). Full writeup with all numbers: [REPORT.md](REPORT.md).
+Full writeup with all numbers: [REPORT.md](REPORT.md).
+
+## Context
+
+This is a hands-on exercise from the **Nebius AI Engineering** program - the **MLOps module
+on LLM inference performance & observability**. The point is not a high benchmark score; it is
+to learn what each layer of a serving stack tells you and to practice the core MLOps loop:
+
+- deploy an open-source **MoE LLM with vLLM** and make an informed inference-config decision;
+- read vLLM's `/metrics` in **Grafana** and tell, at a glance, *where* a request spends its time;
+- build a multi-step **LangGraph** agent and trace it in **Langfuse**;
+- build an **offline eval** that separates capability (accuracy) from latency;
+- and the headline skill: **diagnose a latency bottleneck under load from the dashboards,
+  fix it, and prove the fix held without regressing quality** (see
+  "How we got latency under 5 seconds" below).
+
+Original assignment brief: [ASSIGNMENT.md](ASSIGNMENT.md).
 
 ## System
 
