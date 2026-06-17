@@ -117,7 +117,8 @@ def _dense_rank(chunk_texts: list[str], question: str) -> list[int] | None:
             from sentence_transformers import SentenceTransformer
 
             _model = SentenceTransformer(
-                os.environ.get("EMB_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+                os.environ.get("EMB_MODEL", "sentence-transformers/all-MiniLM-L6-v2"),
+                device=os.environ.get("EMB_DEVICE", "cpu"),  # keep off the GPU vLLM owns
             )
         emb = _model.encode(chunk_texts + [question], normalize_embeddings=True)
         qv = emb[-1]

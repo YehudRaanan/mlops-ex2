@@ -119,3 +119,23 @@ k=3 keeps accuracy and cuts latency ~13% avg / ~22% p95. k=5 is worse on both -
 FK-expansion already pulls neighbor tables, so a larger core k prunes too little
 while still paying retrieval cost. Relative win should grow under load (prefill
 is the bottleneck at 10 RPS). Stacks with gating `verify` (future work).
+
+### v3 — full third cycle, validated under load
+
+Running the full cycle as **v3** (8 workers + schema-fix + `SCHEMA_TOPK=3`) exposed a
+real bug: `sentence-transformers` defaults to **CUDA**, so each of the 8 workers loaded
+the embedding model onto the GPU alongside vLLM (90% util) -> **CUDA OOM ->
+vLLM EngineDeadError -> 56% HTTP-500** under load. Sequential eval missed it; concurrency
+triggered it. Fix: pin embeddings to **CPU** (`device="cpu"`; MiniLM on short text is
+sub-millisecond there, no GPU contention). After the fix, full load comparison:
+
+| Version | Config | load p50 | p95 | errors |
+|---|---|---|---|---|
+| baseline | full schema, 1 sync worker | 88s | **119s** | 38% |
+| v2 | + 8 workers + schema-fix | 6.1s | **60s** | 0.5% |
+| v3 | + schema-pruning k=3 (CPU embeds) | 6.5s | **21s** | 0.5% |
+
+Schema pruning cut p95 **60s -> 21s** under load (~65%) - far more than the unloaded ~20%,
+because prefill is the saturation point at 10 RPS. v3 eval 43.3% (within the 30-question
+run-to-run variance of the 36.7% baseline). SLO (5s) still missed; the remaining gap is the
+2-3 sequential calls/request - next lever is gating `verify`. Trajectory: **119s -> 60s -> 21s**.
