@@ -109,20 +109,41 @@ def _bm25(docs: list[list[str]], query: list[str], k1: float = 1.5, b: float = 0
 _model = None
 
 
-def _dense_rank(chunk_texts: list[str], question: str) -> list[int] | None:
-    """Cosine ranking via sentence-transformers; None if unavailable."""
+def _get_model():
     global _model
-    try:
-        if _model is None:
-            from sentence_transformers import SentenceTransformer
+    if _model is None:
+        from sentence_transformers import SentenceTransformer
 
-            _model = SentenceTransformer(
-                os.environ.get("EMB_MODEL", "sentence-transformers/all-MiniLM-L6-v2"),
-                device=os.environ.get("EMB_DEVICE", "cpu"),  # keep off the GPU vLLM owns
-            )
-        emb = _model.encode(chunk_texts + [question], normalize_embeddings=True)
-        qv = emb[-1]
-        cos = [float(sum(cv_i * qv_i for cv_i, qv_i in zip(cv, qv))) for cv in emb[:-1]]
+        _model = SentenceTransformer(
+            os.environ.get("EMB_MODEL", "sentence-transformers/all-MiniLM-L6-v2"),
+            device=os.environ.get("EMB_DEVICE", "cpu"),  # keep off the GPU vLLM owns
+        )
+    return _model
+
+
+@lru_cache(maxsize=16)
+def _chunk_embeddings(db_id: str):
+    """Per-DB embedding matrix of the chunk keyword docs - computed once, cached.
+
+    The schema is static per DB, so re-embedding the chunks on every request is
+    pure waste; only the question changes at runtime. None if sentence-transformers
+    is unavailable (BM25-only fallback).
+    """
+    try:
+        texts = [" ".join(c.doc_tokens) for c in _chunks(db_id)]
+        return _get_model().encode(texts, normalize_embeddings=True)
+    except Exception:
+        return None
+
+
+def _dense_rank(db_id: str, question: str) -> list[int] | None:
+    """Cosine ranking of the cached chunk embeddings vs the question."""
+    cembs = _chunk_embeddings(db_id)
+    if cembs is None:
+        return None
+    try:
+        qv = _get_model().encode([question], normalize_embeddings=True)[0]
+        cos = (cembs @ qv).tolist()  # only the 1 question is embedded per request
         return sorted(range(len(cos)), key=lambda i: cos[i], reverse=True)
     except Exception:
         return None
@@ -143,7 +164,7 @@ def select_tables(db_id: str, question: str, k: int = 5, fk_expand: bool = True)
 
     docs = [list(c.doc_tokens) for c in chunks]
     rankings = [sorted(range(len(chunks)), key=lambda i, s=_bm25(docs, _tokens(question)): s[i], reverse=True)]
-    dense = _dense_rank([" ".join(c.doc_tokens) for c in chunks], question)
+    dense = _dense_rank(db_id, question)
     if dense is not None:
         rankings.append(dense)
 

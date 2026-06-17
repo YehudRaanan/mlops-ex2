@@ -30,8 +30,9 @@ from agent.execution import ExecutionResult, execute_sql
 from agent.schema import render_schema
 
 # Total generate + revise calls before the loop is forced to stop.
-# 3-5 is a reasonable range; tune it as part of Phase 3.
-MAX_ITERATIONS = 3
+# 3-5 is a reasonable range; tune it as part of Phase 3. Env-overridable so the
+# loop depth can be tuned for the SLO (e.g. MAX_ITERATIONS=2 caps revise to 1).
+MAX_ITERATIONS = int(os.environ.get("MAX_ITERATIONS", "3"))
 
 VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://localhost:8000/v1")
 VLLM_MODEL = os.environ.get("VLLM_MODEL", "Qwen/Qwen3-30B-A3B-Instruct-2507")
