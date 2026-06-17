@@ -47,9 +47,10 @@ LLM_MAX_TOKENS = int(os.environ.get("LLM_MAX_TOKENS", "1024"))
 # unset on the H100 so the real model's behavior is untouched.
 _NO_THINK = os.environ.get("VLLM_NO_THINK") == "1"
 
-# Schema pruning: 0 = send the full schema (default). >0 = retrieve only the
-# top-K question-relevant tables (+ FK neighbors) via agent/schema_index.py to
-# cut prompt size / prefill latency. K~5 suits BIRD's small schemas.
+# Schema pruning: K>0 retrieves only the top-K question-relevant tables
+# (+ FK neighbors) via agent/schema_index.py to cut prompt size / prefill
+# latency; K=0 sends the full schema. Default 3 = same accuracy, ~13-22% lower
+# latency on BIRD (see REPORT section 8).
 SCHEMA_TOPK = int(os.environ.get("SCHEMA_TOPK", "3"))
 
 
