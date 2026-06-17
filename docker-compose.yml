@@ -161,6 +161,13 @@ services:
       NEXTAUTH_SECRET: course-nextauth-not-for-prod
       LANGFUSE_INIT_ORG_NAME: Course
       LANGFUSE_INIT_PROJECT_NAME: Default
+      LANGFUSE_INIT_ORG_ID: course-org
+      LANGFUSE_INIT_PROJECT_ID: course-project
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-11111111-1111-1111-1111-111111111111
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-22222222-2222-2222-2222-222222222222
+      LANGFUSE_INIT_USER_EMAIL: admin@example.com
+      LANGFUSE_INIT_USER_NAME: Admin
+      LANGFUSE_INIT_USER_PASSWORD: langfuse123
 
 volumes:
   prometheus-data:

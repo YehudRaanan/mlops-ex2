@@ -16,6 +16,7 @@ conditional router following the same shape.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 from dataclasses import dataclass, field
@@ -38,6 +39,14 @@ VLLM_MODEL = os.environ.get("VLLM_MODEL", "Qwen/Qwen3-30B-A3B-Instruct-2507")
 # Lets you point the agent at e.g. OpenAI while iterating without a running vLLM.
 LLM_API_KEY = os.environ.get("OPENAI_API_KEY", "not-needed")
 
+# SQL replies are short; cap output to bound latency (helps the Phase 6 SLO too).
+LLM_MAX_TOKENS = int(os.environ.get("LLM_MAX_TOKENS", "1024"))
+# Qwen3 *thinking* variants emit <think> blocks that waste tokens and latency. The
+# H100 target (Qwen3-30B-A3B-Instruct-2507) is non-thinking; set VLLM_NO_THINK=1 to
+# normalize a thinking CPU stand-in (e.g. Qwen3-0.6B) to the same behavior. Left
+# unset on the H100 so the real model's behavior is untouched.
+_NO_THINK = os.environ.get("VLLM_NO_THINK") == "1"
+
 
 @dataclass
 class AgentState:
@@ -56,11 +65,14 @@ class AgentState:
 
 def llm() -> ChatOpenAI:
     """Chat client pointed at VLLM_BASE_URL (your local vLLM by default)."""
+    extra_body = {"chat_template_kwargs": {"enable_thinking": False}} if _NO_THINK else None
     return ChatOpenAI(
         model=VLLM_MODEL,
         base_url=VLLM_BASE_URL,
         api_key=LLM_API_KEY,
         temperature=0.0,
+        max_tokens=LLM_MAX_TOKENS,
+        extra_body=extra_body,
     )
 
 
@@ -78,7 +90,33 @@ def _extract_sql(text: str) -> str:
     otherwise the whole reply. You may need to harden this for your prompts.
     """
     fenced = re.search(r"```(?:sql)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
-    return (fenced.group(1) if fenced else text).strip()
+    if fenced:
+        return fenced.group(1).strip()
+    # Small models often emit an opening fence with no closing one - strip a
+    # leading ```sql / ``` and any dangling trailing fence.
+    text = re.sub(r"^\s*```(?:sql)?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*```\s*$", "", text)
+    return text.strip()
+
+
+def _parse_verdict(text: str) -> dict[str, Any]:
+    """Defensively parse a {"ok": bool, "issue": str} verdict from an LLM reply.
+
+    The model may wrap the JSON in prose or fences, so grab the first {...} block.
+    On any parse failure we fail safe to ok=False so the loop revises rather than
+    silently accepting a bad answer.
+    """
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if match:
+        try:
+            obj = json.loads(match.group(0))
+            return {
+                "ok": bool(obj.get("ok", False)),
+                "issue": str(obj.get("issue", "") or ""),
+            }
+        except (json.JSONDecodeError, AttributeError):
+            pass
+    return {"ok": False, "issue": f"could not parse verifier reply: {text[:200]}"}
 
 
 def generate_sql_node(state: AgentState) -> dict:
@@ -124,7 +162,25 @@ def verify_node(state: AgentState) -> dict:
     What counts as "not plausible" is yours to define - see the Phase 3 targets
     in the README.
     """
-    raise NotImplementedError("Implement in Phase 3")
+    result_text = state.execution.render() if state.execution is not None else "ERROR: no execution result"
+    response = llm().invoke([
+        ("system", prompts.VERIFY_SYSTEM),
+        ("user", prompts.VERIFY_USER.format(
+            question=state.question,
+            sql=state.sql,
+            result=result_text,
+        )),
+    ])
+    verdict = _parse_verdict(response.content)
+    return {
+        "verify_ok": verdict["ok"],
+        "verify_issue": verdict["issue"],
+        "history": state.history + [{
+            "node": "verify",
+            "ok": verdict["ok"],
+            "issue": verdict["issue"],
+        }],
+    }
 
 
 def revise_node(state: AgentState) -> dict:
@@ -137,7 +193,23 @@ def revise_node(state: AgentState) -> dict:
 
     Return: {"sql": <str>, "iteration": state.iteration + 1, ...}.
     """
-    raise NotImplementedError("Implement in Phase 3")
+    result_text = state.execution.render() if state.execution is not None else "ERROR: no execution result"
+    response = llm().invoke([
+        ("system", prompts.REVISE_SYSTEM),
+        ("user", prompts.REVISE_USER.format(
+            schema=state.schema,
+            question=state.question,
+            sql=state.sql,
+            result=result_text,
+            issue=state.verify_issue,
+        )),
+    ])
+    sql = _extract_sql(response.content)
+    return {
+        "sql": sql,
+        "iteration": state.iteration + 1,
+        "history": state.history + [{"node": "revise", "sql": sql}],
+    }
 
 
 def route_after_verify(state: AgentState) -> str:
@@ -146,7 +218,9 @@ def route_after_verify(state: AgentState) -> str:
     Two reasons to end: the verifier was happy (state.verify_ok), or you've hit
     the iteration cap (state.iteration >= MAX_ITERATIONS). Otherwise, revise.
     """
-    raise NotImplementedError("Implement in Phase 3")
+    if state.verify_ok or state.iteration >= MAX_ITERATIONS:
+        return "end"
+    return "revise"
 
 
 # ---- Graph wiring -----------------------------------------------------

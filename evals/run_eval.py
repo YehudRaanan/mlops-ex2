@@ -14,11 +14,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import time
 from pathlib import Path
 
 import httpx
+
+# Agent calls can be slow on a CPU stand-in (several vLLM calls per question).
+# Override for fast H100 runs if desired.
+AGENT_TIMEOUT = float(os.environ.get("EVAL_AGENT_TIMEOUT", "300"))
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_EVAL_FILE = ROOT / "evals" / "eval_set.jsonl"
@@ -57,8 +62,57 @@ def matches(gold_rows: list[tuple] | None, pred_rows: list[tuple] | None) -> boo
 # ---------- Implement these (Phase 5) ----------------------------------
 
 def eval_one(question: dict, agent_url: str) -> dict:
-    """Score one question. Return a dict capturing per-iteration correctness."""
-    raise NotImplementedError("Phase 5")
+    """Score one question. Return a dict capturing per-iteration correctness.
+
+    We ask the agent once, then re-run *each* SQL it produced (one per
+    generate/revise step, taken from the returned history) against the gold DB
+    and compare canonicalized row sets to the gold query's rows. This gives a
+    correctness signal for every iteration, which `summarize` rolls up into a
+    per-iteration pass rate.
+    """
+    db_id = question["db_id"]
+    gold_sql = question["gold_sql"]
+    gold_ok, gold_rows, gold_err = run_sql(db_id, gold_sql)
+
+    payload = {"question": question["question"], "db": db_id}
+    t0 = time.monotonic()
+    agent_error: str | None = None
+    history: list[dict] = []
+    final_sql = ""
+    try:
+        resp = httpx.post(agent_url, json=payload, timeout=AGENT_TIMEOUT)
+        resp.raise_for_status()
+        data = resp.json()
+        history = data.get("history", [])
+        final_sql = data.get("sql", "")
+        if not data.get("ok", False):
+            agent_error = data.get("error")
+    except Exception as e:  # noqa: BLE001
+        agent_error = f"{type(e).__name__}: {e}"
+    latency = time.monotonic() - t0
+
+    # One SQL per generate/revise step; verify entries carry no "sql".
+    per_iteration_sql = [h["sql"] for h in history if h.get("sql")]
+
+    per_iteration_correct: list[bool] = []
+    for sql in per_iteration_sql:
+        ok, rows, _err = run_sql(db_id, sql)
+        per_iteration_correct.append(ok and matches(gold_rows, rows))
+
+    final_correct = per_iteration_correct[-1] if per_iteration_correct else False
+
+    return {
+        "db_id": db_id,
+        "question": question["question"],
+        "gold_sql_ok": gold_ok,
+        "gold_sql_error": gold_err,
+        "final_sql": final_sql,
+        "iterations": len(per_iteration_sql),
+        "per_iteration_correct": per_iteration_correct,
+        "final_correct": final_correct,
+        "agent_error": agent_error,
+        "latency_seconds": latency,
+    }
 
 
 def summarize(results: list[dict]) -> dict:
@@ -70,7 +124,29 @@ def summarize(results: list[dict]) -> dict:
     The agent stopped emitting; whatever it had at termination is what
     would have been served had we polled at iteration k.
     """
-    raise NotImplementedError("Phase 5")
+    n = len(results)
+    max_iters = max((len(r["per_iteration_correct"]) for r in results), default=0)
+
+    def correct_at(r: dict, k: int) -> bool:
+        seq = r["per_iteration_correct"]
+        if not seq:
+            return False
+        return seq[k] if k < len(seq) else seq[-1]  # carry forward last emitted
+
+    pass_rate_at_iteration = [
+        (sum(1 for r in results if correct_at(r, k)) / n if n else 0.0)
+        for k in range(max_iters)
+    ]
+
+    overall_correct = sum(1 for r in results if r["final_correct"])
+    return {
+        "n_questions": n,
+        "overall_pass_rate": (overall_correct / n) if n else 0.0,
+        "overall_correct": overall_correct,
+        "pass_rate_at_iteration": pass_rate_at_iteration,
+        "avg_iterations": (sum(r["iterations"] for r in results) / n) if n else 0.0,
+        "n_agent_errors": sum(1 for r in results if r["agent_error"]),
+    }
 
 
 # ---------- Main (provided) --------------------------------------------
