@@ -101,3 +101,21 @@ survived: post-tuning eval `results/eval_after_tuning.json` = **36.7%**, identic
 - **Serving**: raise `--max-num-seqs` (KV is only 41%), and try `--quantization fp8` to ~halve
   weights -> far more KV + higher decode throughput, trading a little quality (re-measure S5).
 - **Smaller draft + speculative decoding** for the short, structured SQL outputs.
+
+## 8. Schema-linking optimization (implemented)
+
+Per-table chunking + hybrid retrieval (BM25 + MiniLM dense, fused with Reciprocal
+Rank Fusion) + foreign-key expansion prunes the schema to the question-relevant
+tables (`agent/schema_index.py`; enable via `SCHEMA_TOPK`, default now 3).
+Measured on the 30B (eval set, unloaded latency):
+
+| SCHEMA_TOPK | pass rate | latency avg | p95 |
+|---|---|---|---|
+| 0 (full) | 36.7% | 1.05s | 2.65s |
+| 5 | 33.3% | 1.15s | 2.73s |
+| **3 (default)** | **36.7%** | **0.91s** | **2.06s** |
+
+k=3 keeps accuracy and cuts latency ~13% avg / ~22% p95. k=5 is worse on both -
+FK-expansion already pulls neighbor tables, so a larger core k prunes too little
+while still paying retrieval cost. Relative win should grow under load (prefill
+is the bottleneck at 10 RPS). Stacks with gating `verify` (future work).

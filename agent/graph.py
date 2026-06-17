@@ -47,6 +47,11 @@ LLM_MAX_TOKENS = int(os.environ.get("LLM_MAX_TOKENS", "1024"))
 # unset on the H100 so the real model's behavior is untouched.
 _NO_THINK = os.environ.get("VLLM_NO_THINK") == "1"
 
+# Schema pruning: 0 = send the full schema (default). >0 = retrieve only the
+# top-K question-relevant tables (+ FK neighbors) via agent/schema_index.py to
+# cut prompt size / prefill latency. K~5 suits BIRD's small schemas.
+SCHEMA_TOPK = int(os.environ.get("SCHEMA_TOPK", "3"))
+
 
 @dataclass
 class AgentState:
@@ -79,7 +84,15 @@ def llm() -> ChatOpenAI:
 # ---- Nodes ------------------------------------------------------------
 
 def _attach_schema(state: AgentState) -> dict:
-    """Provided. Render the DB schema once at the start of the run."""
+    """Render the DB schema once at the start of the run.
+
+    Full schema by default; if SCHEMA_TOPK>0, prune to the question-relevant
+    tables (hybrid BM25 + dense retrieval) to shrink the prompt.
+    """
+    if SCHEMA_TOPK > 0:
+        from agent.schema_index import render_pruned_schema
+
+        return {"schema": render_pruned_schema(state.db_id, state.question, SCHEMA_TOPK)}
     return {"schema": render_schema(state.db_id)}
 
 
